@@ -88,23 +88,23 @@ static void mixed_center(int cx, int y, const char *s, u32 color, int scale)
 }
 
 /* ---------------- 通用控件 ---------------- */
-static void draw_icon(int x, int y, const u16 *rows, int scale, u32 color)
+static void draw_icon(int x, int y, const u8 *rows, int scale, u32 color)
 {
-    for (int r = 0; r < 16; r++) {
-        u16 bits = rows[r];
-        for (int c = 0; c < 16; c++)
-            if (bits & (0x8000 >> c))
+    for (int r = 0; r < 8; r++) {
+        u8 bits = rows[r];
+        for (int c = 0; c < 8; c++)
+            if (bits & (0x80 >> c))
                 gfx_rect(x + c * scale, y + r * scale, scale, scale, color);
     }
 }
 
-static void panel(int x, int y, int w, int h, const char *title, const u16 *icon)
+static void panel(int x, int y, int w, int h, const char *title, const u8 *icon)
 {
     gfx_round_rect(x, y, w, h, 0x00F4F7FBu, 0x00405878u);
     gfx_rect(x + 2, y + 2, w - 4, 40, 0x002A4A78u);
     mixed_text(x + 14, y + 12, title, C_WHITE, 2);
     if (icon)
-        draw_icon(x + w - 32, y + 12, icon, 1, C_WHITE);
+        draw_icon(x + w - 32, y + 12, icon, 2, C_WHITE);
 }
 
 static void button(int x, int y, int w, int h, const char *label, int hot)

@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""构建 UMDos：汇编 6 个阶段 -> 1.44MB 软盘镜像 -> 16MB 硬盘镜像 -> El Torito 启动 ISO。
+"""构建 UMDos BIOS 软盘、硬盘及 El Torito ISO 镜像。
 
-依赖：nasm、python3、pycdlib（pip install pycdlib）
+依赖：nasm、python3、ziglang 和 pycdlib。
 """
 import os, subprocess, sys, struct, hashlib
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(ROOT, "src")
-INC = os.path.join(SRC, "inc")
-BIN = os.path.join(ROOT, "bin")
+LOADER_SRC = os.path.join(ROOT, "loader")
+INC = os.path.join(LOADER_SRC, "inc")
+BIN = os.path.join(ROOT, "build")
 VERSION = open(os.path.join(ROOT, "VERSION"), encoding="utf-8").read().strip()
-IMG = os.path.join(ROOT, "UMDos %s floppy.img" % VERSION)
-HDD = os.path.join(ROOT, "UMDos %s hdd.img" % VERSION)
-ISO = os.path.join(ROOT, "UMDos %s.iso" % VERSION)
+IMG = os.path.join(BIN, "UMDos %s floppy.img" % VERSION)
+HDD = os.path.join(BIN, "UMDos %s hdd.img" % VERSION)
+ISO = os.path.join(BIN, "UMDos %s.iso" % VERSION)
 
 # 阶段: 名字, 源文件, 扇区数, 起始 LBA, 加载地址
 # P2 四级链：boot -> loader -> head -> kernel
@@ -26,14 +26,15 @@ HDD_SIZE = 16 * 1024 * 1024    # 16MB
 
 # C 内核与文件系统镜像
 KERNEL_LBA = 50
-KERNEL_SECTORS = 320           # 96KB（覆盖 .bss，见 P2）
+KERNEL_SECTORS = 320           # 160 KiB
 FS_LBA = 512
 FS_SECTORS = 256               # 128KB
-KERNEL_SRC = os.path.join(SRC, "kernel")
+KERNEL_SRC = os.path.join(ROOT, "kernel")
+KERNEL_INCLUDE = os.path.join(ROOT, "include", "kernel")
 KERNEL_C = ["libk.c", "kmain.c", "gfx.c", "input.c", "idt.c", "irq.c", "mem.c",
             "gdt.c", "task.c", "syscall.c", "user.c", "vfs.c", "dev.c", "proc.c", "term.c", "sh.c", "sec.c", "acpi.c",
             "sha256.c", "sha3.c", "auth.c", "fs.c", "ata.c", "ui.c"]
-ZIG = [sys.executable, "-m", "ziglang", "cc"]
+ZIG = [sys.executable, "-m", "ziglang"]
 CFLAGS = ["-target", "x86_64-freestanding", "-ffreestanding", "-fno-stack-protector",
           "-fno-pic", "-mno-red-zone", "-mgeneral-regs-only",
           "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
@@ -53,7 +54,7 @@ def build_bins():
         out = os.path.join(BIN, name + ".bin")
         lst = os.path.join(BIN, name + ".lst")
         sh(["nasm", "-f", "bin", "-I", INC + os.sep, "-l", lst,
-            os.path.join(SRC, src), "-o", out])
+            os.path.join(LOADER_SRC, src), "-o", out])
         size = os.path.getsize(out)
         need = secs * 512
         status = "OK" if size == need else "SIZE MISMATCH"
@@ -69,29 +70,15 @@ def layout(buf):
         buf[off:off + len(data)] = data
     for name, lba in (("kernel.bin", KERNEL_LBA), ("fs.img", FS_LBA)):
         path = os.path.join(BIN, name)
-        if os.path.exists(path):
-            data = open(path, "rb").read()
-            off = lba * 512
-            buf[off:off + len(data)] = data
-
-
-def build_user():
-    """编译用户态演示程序（P6）：ELF64，链接到 USER_BASE，然后嵌入内核。"""
-    out = os.path.join(BIN, "user.elf")
-    sh(ZIG + ["-target", "x86_64-freestanding", "-ffreestanding", "-nostdlib",
-              "-fno-stack-protector", "-fno-pic", "-mcmodel=large", "-mno-red-zone",
-              "-fno-asynchronous-unwind-tables", "-fno-unwind-tables", "-O2",
-              "-Wl,-T," + os.path.join(ROOT, "user", "link.ld"),
-              "-o", out,
-              os.path.join(ROOT, "user", "libc.c"),
-              os.path.join(ROOT, "user", "prog.c")])
-    hdr = os.path.join(KERNEL_SRC, "userprog.h")
-    sh([sys.executable, os.path.join(ROOT, "tools", "gen_userprog.py"), out, hdr])
+        with open(path, "rb") as image:
+            data = image.read()
+        off = lba * 512
+        buf[off:off + len(data)] = data
 
 
 def build_kernel():
     """编译 C 内核（Zig/Clang，freestanding x86_64），链接到 0x10000 并转成平铺二进制。"""
-    build_user()
+    # kmain 使用仓库内已提交的 include/kernel/userprog.h。
     obj = os.path.join(BIN, "kobj")
     os.makedirs(obj, exist_ok=True)
     objs = []
@@ -107,17 +94,17 @@ def build_kernel():
 
     for c in KERNEL_C:
         path = os.path.join(KERNEL_SRC, c)
-        if not os.path.exists(path):
-            continue
+        if not os.path.isfile(path):
+            raise SystemExit(f"Missing kernel source: {path}")
         o = os.path.join(obj, c[:-2] + ".o")
-        sh(ZIG + CFLAGS + ["-c", path, "-o", o])
+        sh(ZIG + ["cc"] + CFLAGS + ["-I", KERNEL_INCLUDE, "-c", path, "-o", o])
         objs.append(o)
 
     elf = os.path.join(BIN, "kernel.elf")
-    sh(ZIG + ["-target", "x86_64-freestanding", "-nostdlib",
+    sh(ZIG + ["cc", "-target", "x86_64-freestanding", "-nostdlib",
               "-Wl,-T," + os.path.join(KERNEL_SRC, "link.ld"), "-o", elf] + objs)
     out = os.path.join(BIN, "kernel.bin")
-    sh([sys.executable, os.path.join(ROOT, "tools", "elf2bin.py"), elf, out])
+    sh(ZIG + ["objcopy", "-O", "binary", elf, out])
 
     data = open(out, "rb").read()
     need = KERNEL_SECTORS * 512
@@ -167,9 +154,9 @@ README_FOR_ISO = """UMDos - 16/64 bit boot chain demo
 This CD uses El Torito 1.44MB floppy emulation.
 The boot image (UMDOS.IMG) is also in the root of this ISO.
 
-First boot asks for:
-  - username / password (your choice)
-  - activation code: UMDOS2024
+Demo accounts:
+  - user / umdos
+  - administrator / admin
 
 Sources and build script are in the project folder, not on this CD.
 """
@@ -182,15 +169,16 @@ def build_efi():
     sh([sys.executable, os.path.join(efi_dir, "gen_embed.py"),
         os.path.join(BIN, "kernel.bin"), os.path.join(BIN, "fs.img"), embed])
     out = os.path.join(efi_dir, "bootx64.efi")
-    sh(ZIG + ["-target", "x86_64-uefi", "-nostdlib", "-fno-stack-protector",
+    sh(ZIG + ["cc", "-target", "x86_64-uefi", "-nostdlib", "-fno-stack-protector",
               "-fno-builtin", "-fno-sanitize=all", "-mno-stack-arg-probe",
               "-I", efi_dir, "-o", out, os.path.join(efi_dir, "efi_loader.c")])
     img = os.path.join(efi_dir, "efi.img")
     sh([sys.executable, os.path.join(efi_dir, "mkfat.py"), out, img])
     print("  bootx64.efi + efi.img (FAT12) ready")
+    return img
 
 
-def build_iso():
+def build_iso(efi_img_path=None):
     import pycdlib
     readme = os.path.join(BIN, "README.TXT")
     with open(readme, "w", encoding="ascii", newline="\r\n") as f:
@@ -205,8 +193,7 @@ def build_iso():
     iso.add_eltorito("/UMDOS.IMG;1", bootcatfile="/BOOT.CAT;1",
                      media_name="floppy", boot_load_size=2880, platform_id=0)
     # P13：UEFI 启动项用 FAT ESP 镜像，写在 /EFI.IMG;1
-    efi_img_path = os.path.join(ROOT, "efi", "efi.img")
-    if os.path.exists(efi_img_path):
+    if efi_img_path:
         iso.add_file(efi_img_path, iso_path="/EFI.IMG;1")
         rec = iso.get_record(iso_path="/EFI.IMG;1")
         efi_lba = rec.extent_location()
@@ -251,8 +238,11 @@ if __name__ == "__main__":
     build_img()
     print("== hard disk image ==")
     build_hdd()
-    print("== efi (P13) ==")
-    build_efi()
+    efi_img_path = None
+    efi_sources = ("gen_embed.py", "efi_loader.c", "mkfat.py")
+    if all(os.path.isfile(os.path.join(ROOT, "efi", name)) for name in efi_sources):
+        print("== efi (P13) ==")
+        efi_img_path = build_efi()
     print("== iso ==")
-    build_iso()
+    build_iso(efi_img_path)
     print("done")

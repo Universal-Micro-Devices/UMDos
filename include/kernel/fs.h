@@ -3,6 +3,7 @@
 #define FS_H
 
 #include "types.h"
+#include "bootinfo.h"
 
 #define FS_ROOT_DIR 0xFFFFFFFFu
 
@@ -18,6 +19,7 @@ typedef struct {
 
 int  fs_mount(void *image, u32 bytes);
 int  fs_mounted(void);
+int  storage_init(const bootinfo_t *bi);
 u32  fs_dir(void);
 int  fs_set_dir(u32 dir);
 int  fs_chdir(const char *path);

@@ -24,7 +24,7 @@
 
 /* 存储初始化：ATA + UMDFS 挂载 + 写回后端。
  * P7 起 VFS 要在用户程序之前可用，所以从启动画面里挪到 kmain。 */
-int storage_init(bootinfo_t *bi)
+int storage_init(const bootinfo_t *bi)
 {
     if (fs_mounted()) return 0;
     if (fs_mount((void *)0x40000u, bi->fs_sectors * 512u) != 0) {

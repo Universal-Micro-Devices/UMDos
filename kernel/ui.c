@@ -153,7 +153,6 @@ static void do_step(int step)
     }
     case 2:                             /* 文件系统（P7 起在 kmain 里挂载） */
         if (!fs_mounted()) {
-            extern int storage_init(struct bootinfo *bi);
             storage_init(g_bi);
         }
         load_files = fs_count();

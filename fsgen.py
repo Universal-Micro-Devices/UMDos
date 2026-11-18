@@ -68,8 +68,7 @@ DIRS = [
     ("SYSTEM", [
         ("SYSTEM.TXT",
          "Boot chain:\n"
-         "  boot -> loader -> head -> hello -> firstmain -> nextmain\n"
-         "  -> 64-bit C kernel\n"
+         "  boot -> loader -> head -> 64-bit C kernel\n"
          "\n"
          "Video: VBE linear framebuffer, 32 bpp\n"
          "Filesystem: UMDFS, 128 KB image at LBA 512\n"
@@ -79,7 +78,7 @@ DIRS = [
          "kernel/kmain.c    boot sequence\n"
          "kernel/gfx.c      framebuffer drawing\n"
          "kernel/input.c    PS/2 keyboard and mouse\n"
-         "kernel/sha256.c   password verification\n"
+         "kernel/auth.c     password verification\n"
          "kernel/fs.c       UMDFS reader/writer\n"
          "kernel/ata.c      ATA PIO driver\n"
          "kernel/ui.c       desktop, windows, editor\n"),

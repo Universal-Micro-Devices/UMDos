@@ -9,4 +9,5 @@
 .cache/
 .temp/
 build/
+__pycache__/
 tests/

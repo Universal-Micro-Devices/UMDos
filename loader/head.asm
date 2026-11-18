@@ -7,7 +7,6 @@
 ;   3. 跳到内核入口 0x10000（RDI = bootinfo）
 ;
 ; 旧的 firstmain/nextmain 保留给 dev.1 安装引导使用，
-; 旧 head/hello 保留在 src/legacy/ 供审计对照。
 ; ============================================================
 [BITS 32]
 [ORG 0x9000]

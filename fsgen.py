@@ -42,7 +42,7 @@ ROOT_FILES = [
      "Hai nei cun zhi ji, tian ya ruo bi lin.\n"),
     ("NOTES.TXT",
      "The desktop is drawn straight into the framebuffer.\n"
-     "Click 'My Computer' to open a file manager window.\n"
+     "Click 'This PC' to open a file manager window.\n"
      "You can open several windows and drag their title bars.\n"),
     ("CONTACT.TXT",
      "UMDos demo system\n"

@@ -44,8 +44,6 @@ void gfx_text(int x, int y, const char *s, u32 color, int scale);
 int  gfx_text_width(const char *s, int scale);
 void gfx_text_center(int cx, int y, const char *s, u32 color, int scale);
 
-void gfx_cjk(int x, int y, u32 cp, u32 color, int scale);
-void gfx_cjk_text(int x, int y, const u32 *s, u32 color, int scale);
 int  gfx_cjk_width(const u32 *s, int scale);
 void gfx_cjk_center(int cx, int y, const u32 *s, u32 color, int scale);
 

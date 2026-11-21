@@ -35,6 +35,9 @@ int  vfs_unlink(const char *path);
 void vfs_set_role(int role);
 int  vfs_role(void);
 
+u64  vfs_lock(void);
+void vfs_unlock(u64 flags);
+
 /* P10：按进程拆分 fd 表 */
 typedef struct {
     int  used;

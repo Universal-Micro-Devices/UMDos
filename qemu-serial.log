@@ -1,4 +1,0 @@
-[boot] stage1 ok, jump loader
-[loader] vbe ok, A20 ok
-e820 ok
-disk read error

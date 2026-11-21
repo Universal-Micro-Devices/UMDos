@@ -191,7 +191,7 @@ u32 proc_format_version(char *buf, u32 cap)
 {
     char *p = buf, *end = buf + cap - 1;
     p = append(p, end, "UMDos 64-bit\n");
-    p = append(p, end, "kernel: P10 (proc + /proc)\n");
+    p = append(p, end, "kernel: 64-bit\n");
     *p = 0;
     return (u32)(p - buf);
 }

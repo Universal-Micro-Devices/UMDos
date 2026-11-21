@@ -27,6 +27,7 @@ static int user_ptr_ok(u64 p, u64 len)
 
 void syscall_dispatch(u64 *regs)
 {
+    u64 vf = vfs_lock();
     u64 num = regs[0];        /* rax */
     u64 a1 = regs[5];         /* rdi */
     u64 a2 = regs[4];         /* rsi */
@@ -112,6 +113,7 @@ void syscall_dispatch(u64 *regs)
             serial_puts(b);
         }
         serial_puts("\n");
+        vfs_unlock(vf);
         user_leave_to_kernel((int)a1);   /* 不会返回 */
         ret = 0;
         break;
@@ -120,4 +122,5 @@ void syscall_dispatch(u64 *regs)
         break;
     }
     regs[0] = (u64)ret;
+    vfs_unlock(vf);
 }

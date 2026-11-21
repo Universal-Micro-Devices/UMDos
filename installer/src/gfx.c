@@ -1,7 +1,6 @@
 /* gfx.c - 帧缓冲绘图（1280x720x32 之类的线性帧缓冲） */
 #include "gfx.h"
 #include "font8x16.h"
-#include "cjk_glyphs.h"
 
 static volatile u32 *fb;
 static u32 scr_w, scr_h, scr_stride;
@@ -129,49 +128,7 @@ void gfx_text_center(int cx, int y, const char *s, u32 color, int scale)
 
 /* ---------------- 中文 ---------------- */
 
-static const cjk_glyph *find_glyph(u32 cp)
-{
-    for (int i = 0; i < cjk_count; i++)
-        if (cjk_table[i].cp == cp)
-            return &cjk_table[i];
-    return NULL;
-}
 
-void gfx_cjk(int x, int y, u32 cp, u32 color, int scale)
-{
-    if (scale < 1) scale = 1;
-    const cjk_glyph *g = find_glyph(cp);
-    if (!g) {
-        gfx_rect(x, y, 16 * scale, 16 * scale, color);  /* 缺字画方块 */
-        return;
-    }
-    for (int row = 0; row < 16; row++) {
-        u16 bits = g->rows[row];
-        if (!bits) continue;
-        for (int col = 0; col < 16; col++) {
-            if (bits & (0x8000u >> col))
-                block(x + col * scale, y + row * scale, scale, color);
-        }
-    }
-}
 
-void gfx_cjk_text(int x, int y, const u32 *s, u32 color, int scale)
-{
-    while (*s) {
-        gfx_cjk(x, y, *s, color, scale);
-        x += 16 * scale;
-        s++;
-    }
-}
 
-int gfx_cjk_width(const u32 *s, int scale)
-{
-    int n = 0;
-    while (*s++) n++;
-    return n * 16 * scale;
-}
 
-void gfx_cjk_center(int cx, int y, const u32 *s, u32 color, int scale)
-{
-    gfx_cjk_text(cx - gfx_cjk_width(s, scale) / 2, y, s, color, scale);
-}

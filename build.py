@@ -31,7 +31,7 @@ FS_LBA = 512
 FS_SECTORS = 256               # 128KB
 KERNEL_SRC = os.path.join(SRC, "kernel")
 KERNEL_C = ["libk.c", "kmain.c", "gfx.c", "input.c", "idt.c", "irq.c", "mem.c",
-            "gdt.c", "task.c", "syscall.c", "user.c", "vfs.c", "dev.c", "proc.c", "term.c", "sh.c", "sec.c", "acpi.c",
+            "gdt.c", "task.c", "syscall.c", "user.c", "vfs.c", "dev.c", "proc.c", "percpu.c", "smp.c", "pci.c", "ahci.c", "term.c", "sh.c", "sec.c", "acpi.c",
             "sha256.c", "sha3.c", "auth.c", "fs.c", "ata.c", "ui.c"]
 ZIG = [sys.executable, "-m", "ziglang", "cc"]
 CFLAGS = ["-target", "x86_64-freestanding", "-ffreestanding", "-fno-stack-protector",
@@ -89,9 +89,18 @@ def build_user():
     sh([sys.executable, os.path.join(ROOT, "tools", "gen_userprog.py"), out, hdr])
 
 
+def build_smp():
+    """P15：汇编 AP 跳板并嵌入内核。"""
+    out = os.path.join(BIN, "smp.tramp")
+    sh(["nasm", "-f", "bin", os.path.join(KERNEL_SRC, "smp_tramp.asm"), "-o", out])
+    hdr = os.path.join(KERNEL_SRC, "smptramp.h")
+    sh([sys.executable, os.path.join(ROOT, "tools", "gen_smptramp.py"), out, hdr])
+
+
 def build_kernel():
     """编译 C 内核（Zig/Clang，freestanding x86_64），链接到 0x10000 并转成平铺二进制。"""
     build_user()
+    build_smp()
     obj = os.path.join(BIN, "kobj")
     os.makedirs(obj, exist_ok=True)
     objs = []

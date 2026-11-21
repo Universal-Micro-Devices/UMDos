@@ -20,6 +20,9 @@
 #include "sh.h"
 #include "sec.h"
 #include "acpi.h"
+#include "percpu.h"
+#include "smp.h"
+#include "ahci.h"
 #include "ata.h"
 
 /* 存储初始化：ATA + UMDFS 挂载 + 写回后端。
@@ -27,7 +30,7 @@
 int storage_init(bootinfo_t *bi)
 {
     if (fs_mounted()) return 0;
-    if (fs_mount((void *)0x40000u, bi->fs_sectors * 512u) != 0) {
+    if (fs_mount((void *)0x80000u, bi->fs_sectors * 512u) != 0) {
         serial_puts("[kernel] storage: umdfs mount failed\n");
         return -1;
     }
@@ -86,7 +89,13 @@ void kmain(bootinfo_t *bi)
 
     /* P7/P8：存储 -> VFS -> 设备注册表，然后用自检验证 */
     storage_init(bi);
+    ahci_init();
+    ahci_selftest();
     acpi_init();
+    percpu_init();
+    smp_init();
+    percpu_selftest();
+    smp_selftest();
     fs_selftest();
     dev_init();          /* 先注册设备，VFS 才能把 0/1/2 绑到键盘和串口 */
     vfs_init();

@@ -297,8 +297,28 @@ int sh_exec_line(const char *line)
     return 0;
 }
 
+/* VFS path -> classic display path: "/" => "C:\\UMDos\\User" */
+static void disp_path(const char *p, char *out, u32 cap)
+{
+    char tmp[96];
+    u32 n = 0;
+    const char *pre = "C:\\UMDos\\User";
+    while (*pre && n + 1 < sizeof(tmp)) tmp[n++] = *pre++;
+    if (p && p[0] == '/') {
+        for (u32 i = 1; p[i] && n + 1 < sizeof(tmp); i++)
+            tmp[n++] = (p[i] == '/') ? '\\' : p[i];
+    }
+    tmp[n] = 0;
+    u32 k = 0;
+    while (tmp[k] && k + 1 < cap) { out[k] = tmp[k]; k++; }
+    out[k] = 0;
+}
+
 void sh_prompt(void)
 {
-    term_puts(g_cwd);
-    term_puts("> ");
+    char disp[96];
+    disp_path(g_cwd, disp, sizeof(disp));
+    term_print_color("PS ", 0x003F9E3Fu);       /* low-saturation green */
+    term_print_color(disp, 0x005A9FD4u);          /* low-saturation blue */
+    term_print_color("> ", 0x00FFFFFFu);        /* white */
 }

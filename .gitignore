@@ -53,3 +53,15 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# ---- UMDos build outputs ----
+/bin/
+/*.img
+/*.iso
+/*.log
+qemu-serial.log
+*.pdb
+efi/efi_embed.h
+__pycache__/
+*.pyc
+*.swp

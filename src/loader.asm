@@ -6,7 +6,7 @@
 ;   2. VBE 选模式，填 bootinfo 的 framebuffer 字段
 ;   3. 读 MBR 分区表（只读，用于 bootinfo）
 ;   4. 把内核镜像（LBA 50，192 扇区）读到 0x10000
-;      把 UMDFS 镜像（LBA 512，256 扇区）读到 0x40000
+;      把 UMDFS 镜像（LBA 512，256 扇区）读到 0x80000
 ;      把第三级 head（LBA 9，4 扇区）读到 0x9000
 ;   5. 建 GDT，进入 32 位保护模式，跳到 head
 ;
@@ -24,7 +24,7 @@ HEAD_SECTORS    equ 4
 HEAD_SEG        equ 0x0900          ; 0x9000
 BOOTINFO        equ 0x7000
 KERNEL_SEG      equ 0x1000          ; 0x10000
-FS_SEG          equ 0x4000          ; 0x40000
+FS_SEG          equ 0x8000          ; 0x80000
 
 start:
     cli
@@ -173,9 +173,9 @@ vbe_init:
     jne .next
     cmp byte [mode_block+0x19], 32
     jne .next
-    cmp word [mode_block+0x12], 1280
+    cmp word [mode_block+0x12], 800
     jne .fallback
-    cmp word [mode_block+0x14], 720
+    cmp word [mode_block+0x14], 600
     jne .fallback
     jmp .take
 .fallback:
@@ -345,7 +345,7 @@ load_fs:
     mov ax, FS_LBA + 128
     mov cx, 128
     xor bx, bx
-    mov dx, FS_SEG + 0x1000          ; 0x50000
+    mov dx, FS_SEG + 0x1000          ; 0x90000
     call read_sectors_seg
     jc disk_error
     ret

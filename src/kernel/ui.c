@@ -1,6 +1,7 @@
 /* ui.c - 启动画面 / 登录 / 桌面 / 我的电脑（文件管理器） */
 #include "ui.h"
 #include "gfx.h"
+#include "umdlogo.h"
 #include "input.h"
 #include "fs.h"
 #include "ata.h"
@@ -11,26 +12,38 @@
 #include "idt.h"
 #include "sha3.h"
 #include "io.h"
+#include "acpi.h"
 
-#define FS_ADDR   0x40000u
+#define FS_ADDR   0x80000u
+
+/* forward declarations (UI only) */
+static void redraw(void);
+static void ui_lock_screen(void);
+static int  win_open_ed(int dir, const fs_entry_t *e);
+
+static void open_readme(void);
 #define DBG(c)    outb(0xE9, (u8)(c))
 
-/* ---------------- 中文字符串 ---------------- */
-static const u32 T_MYCOMPUTER[] = { 0x6211, 0x7684, 0x7535, 0x8111, 0 };          /* 我的电脑 */
-static const u32 T_LOGIN[]      = { 0x767B, 0x5F55, 0 };                          /* 登录 */
-static const u32 T_USER[]       = { 0x7528, 0x6237, 0x540D, 0 };                  /* 用户名 */
-static const u32 T_PASS[]       = { 0x5BC6, 0x7801, 0 };                          /* 密码 */
-static const u32 T_FILES[]      = { 0x6587, 0x4EF6, 0x7BA1, 0x7406, 0x5668, 0 };  /* 文件管理器 */
-static const u32 T_NAME[]       = { 0x540D, 0x79F0, 0 };                          /* 名称 */
-static const u32 T_SIZE[]       = { 0x5927, 0x5C0F, 0 };                          /* 大小 */
-static const u32 T_CLOSE[]      = { 0x5173, 0x95ED, 0 };                          /* 关闭 */
-static const u32 T_TOTAL[]      = { 0x5171, 0 };                                  /* 共 */
-static const u32 T_PIECES[]     = { 0x4E2A, 0x6587, 0x4EF6, 0 };                  /* 个文件 */
-static const u32 T_SYSTEM[]     = { 0x7CFB, 0x7EDF, 0 };                          /* 系统 */
-static const u32 T_NEW[]        = { 0x65B0, 0x5EFA, 0 };                          /* 新建 */
-static const u32 T_DEL[]        = { 0x5220, 0x9664, 0 };                          /* 删除 */
-static const u32 T_EDIT[]       = { 0x7F16, 0x8F91, 0 };                          /* 编辑 */
-static const u32 T_RENAME[]     = { 0x91CD, 0x547D, 0x540D, 0 };                  /* 重命名 */
+/* ---------------- UI strings (ASCII only) ---------------- */
+#define T_MYCOMPUTER  "This PC"
+#define T_TERMINAL    "Terminal"
+#define T_RECYCLE     "Recycle Bin"
+#define T_LOGIN       "Login"
+#define T_USER        "User name"
+#define T_PASS        "Password"
+#define T_FILES       "File Manager"
+#define T_NAME        "Name"
+#define T_SIZE        "Size"
+#define T_CLOSE       "Close"
+#define T_TOTAL       "Total"
+#define T_PIECES      "items"
+#define T_SYSTEM      "System"
+#define T_NEW         "New"
+#define T_DEL         "Delete"
+#define T_EDIT        "Edit"
+#define T_RENAME      "Rename"
+#define T_UP          "Up"
+
 
 /* ---------------- 状态 ---------------- */
 static const bootinfo_t *g_bi;
@@ -164,57 +177,99 @@ static void do_step(int step)
     }
 }
 
+static void fill_ellipse(int cx, int cy, int rx, int ry, u32 color)
+{
+    if (rx <= 0 || ry <= 0) return;
+    for (int y = -ry; y <= ry; y++) {
+        int w = 0;
+        while ((w + 1) * (w + 1) * ry * ry + y * y * rx * rx <= rx * rx * ry * ry) w++;
+        gfx_hline(cx - w, cy + y, 2 * w + 1, color);
+    }
+}
+
+static void fill_circle(int cx, int cy, int r, u32 color)
+{
+    fill_ellipse(cx, cy, r, r, color);
+}
+
+/* 官方 UMDos logo（2bpp 位图，最近邻缩放到 size×size） */
+static void draw_umd_logo_size(int x, int y, int size)
+{
+    for (int dy = 0; dy < size; dy++) {
+        int gy = (dy * UMD_LOGO_H) / size;
+        const u8 *row = &umd_logo[gy * UMD_LOGO_STRIDE];
+        int dx = 0;
+        while (dx < size) {
+            int gx = (dx * UMD_LOGO_W) / size;
+            int idx = (row[gx >> 2] >> ((3 - (gx & 3)) * 2)) & 3;
+            int run = 1;
+            while (dx + run < size) {
+                int gx2 = ((dx + run) * UMD_LOGO_W) / size;
+                int j = (row[gx2 >> 2] >> ((3 - (gx2 & 3)) * 2)) & 3;
+                if (j != idx) break;
+                run++;
+            }
+            u32 col = idx == 1 ? 0x0063AAFFu : (idx == 2 ? 0x00191029u : 0u);
+            if (col) gfx_rect(x + dx, y + dy, run, 1, col);
+            dx += run;
+        }
+    }
+}
+
+static void draw_umd_logo(int x, int y, int scale)
+{
+    draw_umd_logo_size(x, y, UMD_LOGO_W * scale);
+}
+
+/* Windows 2000 风格的启动画面：白底 + 官方 logo + 产品字 + 底部蓝条 */
 static void splash_static(void)
 {
     u32 w = gfx_width(), h = gfx_height();
-    gfx_gradient(0, 0, (int)w, (int)h, C_DESKTOP_1, 0x00285090u);
-    gfx_text_center((int)w / 2, (int)h / 4, "A bosom friend afar", C_WHITE, 4);
-    gfx_text_center((int)w / 2, (int)h / 4 + 70, "brings a distant land near.", C_WHITE, 4);
-    gfx_text_center((int)w / 2, (int)h / 4 + 150,
-                    "Wang Bo - Sending Du Shaofu to Shuzhou", 0x0090B8E0u, 2);
-    gfx_hline((int)w / 2 - 320, (int)h / 4 + 210, 640, 0x004070A0u);
+    gfx_gradient(0, 0, (int)w, (int)h, 0x00F8F9FBu, 0x00E4E9F1u);
+
+    int cx = (int)w / 2;
+    int lx = cx - 210, ly = 120;
+    /* 官方 logo */
+    draw_umd_logo(lx, ly, 4);
+
+    /* 产品名 */
+    gfx_text(lx + 154, ly + 4, "UMDos", 0x00191029u, 7);
+    gfx_text(lx + 156, ly + 104, "2.6 Professional", 0x00323A46u, 3);
+    gfx_text(lx + 158, ly + 152, "Built on UMDos Technology", 0x00707880u, 1);
+
+    /* 底部蓝条 */
+    int bh = 42, by = (int)h - bh;
+    gfx_gradient(0, by, (int)w, bh, 0x000E4FA0u, 0x000A3A78u);
+    gfx_hline(0, by, (int)w, 0x004A8AE0u);
+    gfx_text(24, by + 13, "Starting up...", 0x00FFFFFFu, 1);
     DBG(0x10);
 }
 
-/* 状态区：画在固定深色面板里，每次只重画这一块 */
+/* 进度区：底部蓝条上方的步骤文字 + 进度条（只重画这一块） */
 static void splash_panel(u32 el, u32 total, int step)
 {
     u32 w = gfx_width(), h = gfx_height();
-    int pw = 760, ph = 190;
-    int px = (int)w / 2 - pw / 2, py = (int)h / 2 + 40;
-
-    gfx_rect(px, py, pw, ph, 0x00182848u);
-    gfx_frame(px, py, pw, ph, 0x00385888u);
-
     const char *msgs[4] = {
         "Reading partition table ...",
         "Loading kernel image ...",
         "Mounting UMDFS filesystem ...",
         "Starting user session ...",
     };
-    gfx_text(px + 24, py + 18, msgs[step > 3 ? 3 : step], 0x00C8DCF0u, 2);
+    int bx = 24, by = (int)h - 104, bw = (int)w - 48;
+    gfx_text(bx, by, msgs[step > 3 ? 3 : step], 0x00505A66u, 1);
 
-    int bw = pw - 48, bx = px + 24, by = py + 62;
-    u32 done = (u32)step * 25u;
-    u32 time_part = total ? (el * 100u) / total : 100u;
-    u32 pct = done + time_part / 4u;
+    u32 pct = (u32)step * 25u;
+    if (total) pct += (el * 25u) / total;
     if (pct > 100) pct = 100;
-    gfx_frame(bx, by, bw, 24, 0x00A0C0E0u);
-    gfx_rect(bx + 3, by + 3, (int)((bw - 6) * pct / 100u), 18, C_ACCENT);
 
-    char buf[24];
+    gfx_bevel_down(bx, by + 24, bw, 16, 0x00FFFFFFu);
+    if (pct > 0) gfx_rect(bx + 2, by + 26, (int)((bw - 4) * pct / 100u), 12, 0x002F7CD6u);
+
+    char buf[8];
     itou(pct, buf, 10, 0);
-    int pct_x = px + pw - 24 - (int)strlen(buf) * 16 - 16;
-    gfx_text(pct_x, py + 18, buf, C_WHITE, 2);
-    gfx_text(pct_x + (int)strlen(buf) * 16, py + 18, "%", C_WHITE, 2);
-
-    u32 left = (el < total) ? total - el : 0;
-    itou(left, buf, 10, 0);
-    gfx_text(px + 24, py + 118, "Time remaining:", 0x0088A8C8u, 1);
-    gfx_text(px + 24 + 16 * 8, py + 112, buf, 0x00E0F0FFu, 2);
-    gfx_text(px + 24 + 16 * 8 + (int)strlen(buf) * 16 + 8, py + 118, "s", 0x0088A8C8u, 1);
-    gfx_text(px + 24, py + 152,
-             "Loading kernel and filesystem - please wait", 0x007890B0u, 1);
+    int tx = (int)w - 24 - ((int)strlen(buf) + 1) * 8;
+    gfx_text(tx, by, buf, 0x00505A66u, 1);
+    gfx_text(tx + (int)strlen(buf) * 8, by, "%", 0x00505A66u, 1);
 }
 
 void ui_splash(const bootinfo_t *bi)
@@ -255,8 +310,8 @@ void ui_splash(const bootinfo_t *bi)
 static void field(int x, int y, int w, int h, const char *text, int len, int mask,
                   int active)
 {
-    gfx_rect(x, y, w, h, C_WHITE);
-    gfx_frame(x, y, w, h, active ? C_ACCENT : 0x00889898u);
+    gfx_bevel_down(x, y, w, h, C_WHITE);          /* classic sunken entry */
+    if (active) gfx_frame(x + 1, y + 1, w - 2, h - 2, C_ACCENT);
     int tx = x + 10, ty = y + (h - 16) / 2;
     for (int i = 0; i < len; i++)
         gfx_char(tx + i * 8, ty, mask ? '*' : text[i], C_TEXT, 1);
@@ -315,30 +370,64 @@ static int check_login(void)
 static void draw_login(void)
 {
     u32 w = gfx_width(), h = gfx_height();
-    gfx_gradient(0, 0, (int)w, (int)h, C_DESKTOP_1, 0x00204878u);
+    gfx_gradient(0, 0, (int)w, (int)h, 0x000B1730u, 0x00182C4Eu);
 
-    int pw = 560, ph = 400;
-    int px = (int)w / 2 - pw / 2, py = (int)h / 2 - ph / 2;
-    gfx_round_rect(px, py, pw, ph, C_PANEL, 0x00507090u);
-    gfx_rect(px + 2, py + 2, pw - 4, 56, C_TITLE);
-    gfx_cjk_center((int)w / 2, py + 12, T_LOGIN, C_WHITE, 2);
-    gfx_text(px + pw - 120, py + 20, "UMDos 1.0", 0x00A8C0D8u, 1);
+    int cx = (int)w / 2;
+    int ax = cx - 250, ay = (int)h / 2 - 120;
 
-    gfx_cjk_text(px + 48, py + 78, T_USER, C_TEXT, 2);
-    field(px + 48, py + 118, pw - 96, 36, user_buf, user_len, 0, focus == 0);
+    /* 头像卡片（深灰底 + 白色人像） */
+    gfx_rect(ax, ay, 140, 140, 0x00383E48u);
+    fill_circle(ax + 70, ay + 50, 28, 0x00F2F4F7u);
+    /* 肩部：椭圆只画在卡片内的上半部分 */
+    for (int y = ay + 112; y < ay + 140; y++) {
+        int dy = y - (ay + 150);
+        int half = 0;
+        while ((half + 1) * (half + 1) * 44 * 44 + dy * dy * 52 * 52 <= 52 * 52 * 44 * 44) half++;
+        gfx_hline(ax + 70 - half, y, 2 * half + 1, 0x00F2F4F7u);
+    }
+    gfx_frame(ax, ay, 140, 140, 0x00606A78u);
 
-    gfx_cjk_text(px + 48, py + 176, T_PASS, C_TEXT, 2);
-    field(px + 48, py + 216, pw - 96, 36, pass_buf, pass_len, 1, focus == 1);
+    /* 输入区 */
+    int fx = cx + 20, fw = 300;
+    int fy = (int)h / 2 - 70;
+    gfx_text(fx, fy - 26, "User name", 0x00C8D2E0u, 1);
+    gfx_rect(fx, fy, fw, 34, 0x00FFFFFFu);
+    gfx_frame(fx, fy, fw, 34, focus == 0 ? 0x002F7CD6u : 0x00A8B4C4u);
+    for (int i = 0; i < user_len; i++)
+        gfx_char(fx + 10 + i * 8, fy + 9, user_buf[i], 0x00101820u, 1);
+    if (focus == 0 && ((flash_tick >> 3) & 1) == 0)
+        gfx_rect(fx + 10 + user_len * 8, fy + 7, 2, 20, 0x002F7CD6u);
 
-    int bx = (int)w / 2 - 90, by = py + 282;
-    gfx_round_rect(bx, by, 180, 44, C_ACCENT, 0x00264C78u);
-    gfx_text_center((int)w / 2, by + 6, "Sign in", C_WHITE, 2);
+    gfx_text(fx, fy + 70, "Password", 0x00C8D2E0u, 1);
+    gfx_rect(fx, fy + 94, fw, 34, 0x00FFFFFFu);
+    gfx_frame(fx, fy + 94, fw, 34, focus == 1 ? 0x002F7CD6u : 0x00A8B4C4u);
+    for (int i = 0; i < pass_len; i++)
+        gfx_char(fx + 10 + i * 8, fy + 103, '*', 0x00101820u, 1);
+    if (focus == 1 && ((flash_tick >> 3) & 1) == 0)
+        gfx_rect(fx + 10 + pass_len * 8, fy + 101, 2, 20, 0x002F7CD6u);
+
+    /* 蓝色箭头登录按钮 */
+    int bx = fx + fw + 6, by = fy + 94;
+    gfx_rect(bx, by, 34, 34, 0x002F7CD6u);
+    gfx_frame(bx, by, 34, 34, 0x001E5FA8u);
+    gfx_hline(bx + 8, by + 16, 16, 0x00FFFFFFu);
+    for (int i = 0; i < 7; i++) {
+        gfx_hline(bx + 17 + i, by + 16 - i, 2, 0x00FFFFFFu);
+        gfx_hline(bx + 17 + i, by + 16 + i, 2, 0x00FFFFFFu);
+    }
 
     if (login_msg)
-        gfx_text_center((int)w / 2, py + ph - 30, login_msg, C_RED, 1);
+        gfx_text(fx, fy + 146, login_msg, 0x00FF8A80u, 1);
     else
-        gfx_text_center((int)w / 2, py + ph - 30,
-                        "Enter = sign in   Tab = switch field", C_TEXT_DIM, 1);
+        gfx_text(fx, fy + 146, "Enter = sign in   Tab = switch field", 0x008E9AACu, 1);
+
+    /* 底部标识与电源图标 */
+    int bl = (int)w / 2 - 62;
+    draw_umd_logo(bl, (int)h - 46, 1);
+    gfx_text(bl + 36, (int)h - 32, "UMDos 2.6", 0x00A8B4C8u, 1);
+    fill_circle(36, (int)h - 42, 15, 0x00D8DEE8u);
+    fill_circle(36, (int)h - 42, 11, 0x000F1F38u);
+    gfx_vline(36, (int)h - 52, 12, 0x00D8DEE8u);
 }
 
 static void append_char(char *buf, int *len, char ch, int cap)
@@ -372,20 +461,21 @@ int ui_login(const bootinfo_t *bi)
             btn_prev = ev.buttons;
             if (pressed) {
                 /* 点输入框切换焦点 */
-                int pw = 560, ph = 400;
-                int px = (int)gfx_width() / 2 - pw / 2, py = (int)gfx_height() / 2 - ph / 2;
-                if (cur_x > px + 48 && cur_x < px + pw - 48) {
-                    if (cur_y > py + 118 && cur_y < py + 154) { focus = 0; }
-                    else if (cur_y > py + 216 && cur_y < py + 252) { focus = 1; }
-                    else if (cur_y > py + 282 && cur_y < py + 326) {
-                        if (check_login()) return 1;
-                        login_msg = "Wrong username or password";
-                    }
-                    cursor_erase();
-                    draw_login();
-                    cursor_draw();
+                int fx = (int)gfx_width() / 2 + 20, fy = (int)gfx_height() / 2 - 70;
+                int fw = 300;
+                if (cur_x >= fx && cur_x < fx + fw) {
+                    if (cur_y >= fy && cur_y < fy + 34) focus = 0;
+                    else if (cur_y >= fy + 94 && cur_y < fy + 128) focus = 1;
+                }
+                if (cur_x >= fx + fw + 6 && cur_x < fx + fw + 40 &&
+                    cur_y >= fy + 94 && cur_y < fy + 128) {
+                    if (check_login()) return 1;
+                    login_msg = "Wrong username or password";
                 }
             }
+            cursor_erase();
+            draw_login();
+            cursor_draw();
             continue;
         }
 
@@ -415,7 +505,6 @@ int ui_login(const bootinfo_t *bi)
 #define WT_FM   1
 #define WT_ED   2
 
-static const u32 T_UP[] = { 0x4E0A, 0x7EA7, 0 };        /* 上级 */
 
 typedef struct {
     int open, type;
@@ -456,58 +545,151 @@ static int find_len;
 static char repl_buf[40];
 static int repl_len;
 
-#define ICON_X   20
-#define ICON_Y   470
+#define ICON_X        40
+#define ICON_Y        14
+#define ICON_W        32
+#define ICON_H        32
 #define ICON_W   96
 #define ICON_H   96
 
 /* ---------------- 通用绘制 ---------------- */
-static void draw_computer_icon(int x, int y, int hot)
+/* ---------------- flat desktop icons (Win10 style, no gradients/shadows) ---------------- */
+static int start_open, start_sub;
+
+/* ================= classic Windows-2000 / ReactOS look ================= */
+
+/* 32x32 flat-classic icons (rect/lines only) */
+static void icon_pc(int x, int y)
 {
-    u32 frame_col = hot ? C_ACCENT : 0x0080A0C0u;
-    gfx_round_rect(x, y, ICON_W, ICON_H - 16, 0x00E8EEF8u, frame_col);
-    gfx_rect(x + 8, y + 8, ICON_W - 16, ICON_H - 40, 0x00123060u);
-    for (int i = 0; i < 4; i++)
-        gfx_rect(x + 16, y + 18 + i * 10, 30 + (i * 13) % 40, 3, 0x004080C0u);
-    gfx_rect(x + 16, y + 58, ICON_W - 32, 4, 0x00305080u);
-    gfx_rect(x + ICON_W / 2 - 10, y + ICON_H - 16, 20, 8, frame_col);
-    gfx_rect(x + ICON_W / 2 - 26, y + ICON_H - 8, 52, 6, frame_col);
+    gfx_rect(x + 2, y + 4, 28, 20, 0x00C0C0C0u);
+    gfx_frame(x + 2, y + 4, 28, 20, 0x00000000u);
+    gfx_rect(x + 5, y + 7, 22, 13, 0x00008080u);
+    gfx_frame(x + 5, y + 7, 22, 13, 0x00404040u);
+    gfx_rect(x + 8, y + 25, 16, 4, 0x00C0C0C0u);
+    gfx_frame(x + 8, y + 25, 16, 4, 0x00000000u);
+    gfx_rect(x + 5, y + 29, 22, 2, 0x00808080u);
 }
 
-static void draw_topbar(void)
+static void icon_cmd(int x, int y)
 {
-    u32 w = gfx_width();
-    gfx_rect(0, 0, (int)w, 44, 0x00102038u);
-    gfx_rect(0, 44, (int)w, 2, C_ACCENT);
-    gfx_text(16, 12, "UMDos", C_WHITE, 2);
-    gfx_text(120, 16, "64-bit kernel", 0x0088A8C8u, 1);
+    gfx_rect(x + 2, y + 4, 28, 24, 0x00000000u);
+    gfx_frame(x + 3, y + 5, 26, 22, 0x00FFFFFFu);
+    gfx_rect(x + 4, y + 6, 24, 4, 0x00C0C0C0u);
+    gfx_text(x + 5, y + 12, "C:\\>", 0x00FFFFFFu, 1);
+    gfx_rect(x + 5, y + 22, 6, 2, 0x00FFFFFFu);
+}
 
-    u32 hh, mm, ss;
-    rtc_hms(&hh, &mm, &ss);
-    char t[16];
-    char *p = itou(hh, t, 10, 2);
-    *p++ = ':';
-    p = itou(mm, p, 10, 2);
-    *p++ = ':';
-    p = itou(ss, p, 10, 2);
-    *p = 0;
-    gfx_text((int)w - 170, 12, t, 0x00A8C8E8u, 2);
+static void icon_bin(int x, int y)
+{
+    gfx_rect(x + 8, y + 6, 16, 3, 0x00C0C0C0u);
+    gfx_frame(x + 8, y + 6, 16, 3, 0x00000000u);
+    gfx_rect(x + 6, y + 9, 20, 20, 0x00C0C0C0u);
+    gfx_frame(x + 6, y + 9, 20, 20, 0x00000000u);
+    for (int i = 0; i < 3; i++)
+        gfx_rect(x + 11 + i * 5, y + 12, 1, 14, 0x00808080u);
+    gfx_rect(x + 13, y + 3, 6, 2, 0x00000000u);
+}
+
+static void icon_label(int cx, int y, const char *s)
+{
+    int x = cx - gfx_text_width(s, 1) / 2;
+    gfx_text(x + 1, y + 1, s, 0x00000000u, 1);
+    gfx_text(x, y, s, 0x00FFFFFFu, 1);
 }
 
 static void draw_file_icon(int x, int y)
 {
-    gfx_rect(x, y, 14, 18, 0x00E0E8F0u);
-    gfx_frame(x, y, 14, 18, 0x00708090u);
-    for (int i = 0; i < 3; i++)
-        gfx_hline(x + 3, y + 5 + i * 4, 8, 0x00A0B0C0u);
+    gfx_rect(x + 1, y, 12, 16, 0x00FFFFFFu);
+    gfx_frame(x + 1, y, 12, 16, 0x00000000u);
+    gfx_hline(x + 3, y + 5, 7, 0x00808080u);
+    gfx_hline(x + 3, y + 8, 7, 0x00808080u);
+    gfx_hline(x + 3, y + 11, 5, 0x00808080u);
 }
 
 static void draw_dir_icon(int x, int y)
 {
-    gfx_rect(x, y + 3, 16, 13, 0x00F0D080u);
-    gfx_frame(x, y + 3, 16, 13, 0x00907830u);
-    gfx_rect(x + 2, y, 7, 5, 0x00F0D080u);
-    gfx_frame(x + 2, y, 7, 5, 0x00907830u);
+    gfx_rect(x + 1, y + 4, 15, 12, 0x00F0D080u);
+    gfx_frame(x + 1, y + 4, 15, 12, 0x00000000u);
+    gfx_rect(x + 1, y, 7, 4, 0x00F0D080u);
+    gfx_frame(x + 1, y, 7, 4, 0x00000000u);
+}
+
+/* classic taskbar: Start + task buttons + clock tray */
+static void draw_taskbar(void)
+{
+    u32 w = gfx_width(), h = gfx_height();
+    int y = (int)h - 30;
+    gfx_rect(0, y, (int)w, 30, C_PANEL);
+    gfx_hline(0, y, (int)w, C_WHITE);
+
+    int sopen = start_open;
+    gfx_bevel_down(3, y + 3, 56, 24, C_PANEL);          /* Start pressed look when open */
+    if (!sopen) gfx_bevel_up(3, y + 3, 56, 24, C_PANEL);
+    draw_umd_logo_size(7, y + 6, 18);
+    gfx_text(30, y + 9, "Start", C_TEXT, 1);
+
+    int bx = 70;
+    for (int k = 0; k < nz; k++) {
+        uwnd *w2 = &wins[zorder[k]];
+        int hot = (wfocus == zorder[k]);
+        gfx_bevel_down(bx, y + 3, 150, 24, hot ? 0x00D0D0D0u : C_PANEL);
+        const char *t = (w2->type == WT_FM) ? "File Manager" : w2->name;
+        gfx_text(bx + 6, y + 9, t, C_TEXT, 1);
+        bx += 156;
+    }
+
+    /* tray clock */
+    gfx_bevel_down((int)w - 78, y + 3, 74, 24, C_PANEL);
+    u32 hh, mm, ss;
+    rtc_hms(&hh, &mm, &ss);
+    char t[8];
+    char *p = itou(hh, t, 10, 2);
+    *p++ = ':';
+    p = itou(mm, p, 10, 2);
+    *p = 0;
+    gfx_text((int)w - 66, y + 9, t, C_TEXT, 1);
+}
+
+/* classic Start menu with Programs fly-out */
+static void draw_start_menu(void)
+{
+    int w = gfx_width(), h = gfx_height();
+    int mw = 176, mh = 8 + 7 * 22 + 6 + 2 * 22;
+    int mx = 2, my = (int)h - 30 - mh;
+    gfx_bevel_up(mx, my, mw, mh, C_PANEL);
+    gfx_hline(mx + 2, my + 2, mw - 4, C_WHITE);
+
+    static const char *items[7] = {
+        "Programs", "Documents", "Settings", "Find", "Help", "Run...", "Shut Down..."
+    };
+    for (int i = 0; i < 7; i++) {
+        int ry = my + 4 + i * 22;
+        int dim = (i == 1 || i == 2 || i == 3);
+        if (i == 0 && start_sub == 1)
+            gfx_rect(mx + 2, ry, mw - 4, 20, C_SELECT);
+        gfx_text(mx + 20, ry + 5, items[i], dim ? 0x00808080u : (i == 0 && start_sub == 1 ? C_SELECT_TEXT : C_TEXT), 1);
+        if (i == 0) {
+            int ax = mx + mw - 13, ay = ry + 7;
+            for (int k = 0; k < 5; k++) gfx_vline(ax + k, ay + k, 9 - 2 * k, C_TEXT);
+        }
+    }
+    gfx_hline(mx + 4, my + 4 + 7 * 22 + 2, mw - 8, C_PANEL_DARK);
+    gfx_text(mx + 20, my + 4 + 7 * 22 + 6, "Log Off...", C_TEXT, 1);
+
+    if (start_sub == 1) {
+        int sx = mx + mw, sy = my + 4;
+        int items2 = 5;
+        gfx_bevel_up(sx, sy, 168, 8 + items2 * 22, C_PANEL);
+        static const char *apps[5] = { "File Manager", "Command Prompt", "Text Editor", "-", "About UMDos" };
+        for (int i = 0; i < items2; i++) {
+            int ry = sy + 4 + i * 22;
+            if (apps[i][0] == '-') {
+                gfx_hline(sx + 6, ry + 10, 156, C_PANEL_DARK);
+                continue;
+            }
+            gfx_text(sx + 10, ry + 5, apps[i], C_TEXT, 1);
+        }
+    }
 }
 
 static void draw_preview(int x, int y, int w, int h, const fs_entry_t *e)
@@ -587,10 +769,10 @@ static int win_open_fm(void)
     uwnd *w = &wins[i];
     w->open = 1;
     w->type = WT_FM;
-    w->w = 760;
-    w->h = 470;
-    w->x = 150 + (nz * 44) % 320;
-    w->y = 60 + (nz * 34) % 180;
+    w->w = 620;
+    w->h = 430;
+    w->x = 90 + (nz * 30) % 120;
+    w->y = 50 + (nz * 24) % 80;
     w->dir = (u32)fs_dir();
     w->sel = -1;
     w->lscroll = 0;
@@ -606,10 +788,10 @@ static int win_open_ed(int dir, const fs_entry_t *e)
     uwnd *w = &wins[i];
     w->open = 1;
     w->type = WT_ED;
-    w->w = 780;
-    w->h = 520;
-    w->x = 190 + (nz * 40) % 280;
-    w->y = 70 + (nz * 30) % 160;
+    w->w = 640;
+    w->h = 440;
+    w->x = 80 + (nz * 30) % 100;
+    w->y = 60 + (nz * 24) % 70;
     w->dir = dir;
     strcpy_s(w->name, sizeof(w->name), e->name);
     const u8 *d = fs_data(e);
@@ -632,6 +814,27 @@ static int win_open_ed(int dir, const fs_entry_t *e)
 }
 
 /* ---------------- 文件管理器窗口 ---------------- */
+static void draw_wnd_frame(int x, int y, int w, int h, const char *title, int active)
+{
+    gfx_bevel_up(x, y, w, h, C_PANEL);
+    if (active) gfx_gradient(x + 2, y + 2, w - 4, 22, C_TITLE, C_TITLE_2);
+    else gfx_rect(x + 2, y + 2, w - 4, 22, 0x00808080u);
+    gfx_text(x + 6, y + 7, title, C_WHITE, 1);
+
+    int bx = x + w - 3 * 18 - 4;
+    for (int i = 0; i < 3; i++)
+        gfx_bevel_up(bx + i * 18, y + 3, 16, 16, C_PANEL);
+    gfx_hline(bx + 4, y + 12, 8, 0x00000000u);                  /* minimize */
+    gfx_frame(bx + 18 + 4, y + 8, 8, 7, 0x00000000u);           /* maximize */
+    gfx_text(bx + 36 + 4, y + 6, "X", 0x00000000u, 1);          /* close */
+
+    gfx_text(x + 6, y + 27, "File", C_TEXT, 1);
+    gfx_text(x + 44, y + 27, "Edit", C_TEXT, 1);
+    gfx_text(x + 84, y + 27, "View", C_TEXT, 1);
+    gfx_text(x + 124, y + 27, "Help", C_TEXT, 1);
+    gfx_hline(x + 2, y + 42, w - 4, C_PANEL_DARK);
+}
+
 static void draw_fm(uwnd *w)
 {
     int idx = win_index(w);
@@ -640,31 +843,34 @@ static void draw_fm(uwnd *w)
     fs_path(path, sizeof(path));
 
     int tx = w->x, ty = w->y, tw = w->w, th = w->h;
-    gfx_round_rect(tx, ty, tw, th, C_PANEL, wfocus == idx ? C_ACCENT : 0x00405878u);
-    gfx_rect(tx + 2, ty + 2, tw - 4, 42, wfocus == idx ? C_TITLE : 0x002A3E5Cu);
-
-    int hx = tx + 12;
-    gfx_cjk_text(hx, ty + 12, T_MYCOMPUTER, C_WHITE, 2);
-    hx += gfx_cjk_width(T_MYCOMPUTER, 2) + 12;
-    gfx_text(hx, ty + 18, path, 0x00A8C0E0u, 1);
-
-    int cbx = tx + tw - 36, cby = ty + 9;
-    gfx_round_rect(cbx, cby, 26, 26, 0x00C04040u, 0x00802020u);
-    gfx_text(cbx + 7, cby + 3, "X", C_WHITE, 2);
+    char tbuf[96];
+    int ti = 0;
+    const char *pre = "File Manager - ";
+    for (int k = 0; pre[k] && ti < 90; k++) tbuf[ti++] = pre[k];
+    for (int k = 0; path[k] && ti < 95; k++) tbuf[ti++] = path[k];
+    tbuf[ti] = 0;
+    draw_wnd_frame(tx, ty, tw, th, tbuf, wfocus == idx);
 
     /* 工具栏 */
     int bty = ty + 52;
-    gfx_round_rect(tx + 10, bty, 62, 26, 0x00D8E4F0u, 0x008098B0u);
-    gfx_cjk_text(tx + 14, bty + 5, T_NEW, C_TEXT, 1);
-    gfx_round_rect(tx + 78, bty, 62, 26, 0x00D8E4F0u, 0x008098B0u);
-    gfx_cjk_text(tx + 82, bty + 5, T_DEL, C_TEXT, 1);
-    gfx_round_rect(tx + 146, bty, 62, 26, 0x00D8E4F0u, 0x008098B0u);
-    gfx_cjk_text(tx + 156, bty + 5, T_UP, C_TEXT, 1);
+    gfx_round_rect(tx + 10, bty, 62, 26, C_DESKTOP_1, C_PANEL_DARK);
+    gfx_text(tx + 14, bty + 5, T_NEW, C_TEXT, 1);
+    gfx_round_rect(tx + 78, bty, 62, 26, C_DESKTOP_1, C_PANEL_DARK);
+    gfx_text(tx + 82, bty + 5, T_DEL, C_TEXT, 1);
+    gfx_round_rect(tx + 146, bty, 62, 26, C_DESKTOP_1, C_PANEL_DARK);
+    gfx_text(tx + 156, bty + 5, T_UP, C_TEXT, 1);
 
     char tmp[16];
     itou((u32)fs_count(), tmp, 10, 0);
-    gfx_text(tx + 222, bty + 8, tmp, C_TEXT, 1);
-    gfx_text(tx + 222 + (int)strlen(tmp) * 8, bty + 8, " items", C_TEXT_DIM, 1);
+    {
+        char count[24];
+        int n = 0;
+        for (int k = 0; tmp[k] && n < 20; k++) count[n++] = tmp[k];
+        const char *w2 = " items";
+        for (int k = 0; w2[k] && n < 23; k++) count[n++] = w2[k];
+        count[n] = 0;
+        gfx_text(tx + 222, bty + 8, count, C_TEXT_DIM, 1);
+    }
     if (fm_msg)
         gfx_text(tx + tw - 10 - gfx_text_width(fm_msg, 1), bty + 8, fm_msg, C_TEXT_DIM, 1);
     gfx_hline(tx + 8, ty + 84, tw - 16, 0x00B0C0D0u);
@@ -697,7 +903,7 @@ static void draw_fm(uwnd *w)
             gfx_rect(tx + 10, ry, list_w - 20, 28, C_SELECT);
         if (fs_is_dir(e)) draw_dir_icon(tx + 18, ry + 5);
         else draw_file_icon(tx + 18, ry + 4);
-        gfx_text(tx + 42, ry + 6, e->name, C_TEXT, 1);
+        gfx_text(tx + 42, ry + 6, e->name, (idx == w->sel) ? C_SELECT_TEXT : C_TEXT, 1);
         if (fs_is_dir(e)) {
             gfx_text(tx + 42 + (int)strlen(e->name) * 8 + 8, ry + 6, "<DIR>", C_TEXT_DIM, 1);
         } else {
@@ -727,18 +933,45 @@ static void draw_fm(uwnd *w)
     /* 状态栏 */
     int sy = ty + th - 26;
     gfx_hline(tx + 8, sy - 4, tw - 16, 0x00B0C0D0u);
-    gfx_cjk_text(tx + 10, sy, T_TOTAL, C_TEXT, 1);
+    {
+        char st[24];
+        int n = 0;
+        for (int k = 0; tmp[k] && n < 20; k++) st[n++] = tmp[k];
+        const char *w2 = " items";
+        for (int k = 0; w2[k] && n < 23; k++) st[n++] = w2[k];
+        st[n] = 0;
+        gfx_text(tx + 10, sy, st, C_TEXT, 1);
+    }
     itou((u32)n, tmp, 10, 0);
     gfx_text(tx + 32, sy, tmp, C_TEXT, 1);
-    gfx_cjk_text(tx + 32 + (int)strlen(tmp) * 8 + 8, sy, T_PIECES, C_TEXT, 1);
+
     char info[40];
-    char *p = info;
-    const char *t1 = "free ";
-    while (*t1) *p++ = *t1++;
-    p = itou(fs_free_blocks(), p, 10, 0);
-    const char *t2 = " blocks";
-    while (*t2) *p++ = *t2++;
-    *p = 0;
+    char num[16];
+    {
+        /* disk free space in MB / GB (no block counts) */
+        u64 free_bytes = (u64)fs_free_blocks() * (u64)fs_block_size();
+        u64 total_bytes = (u64)fs_block_count() * (u64)fs_block_size();
+        char *q = info;
+        if (total_bytes >= 1024ull * 1024ull * 1024ull) {
+            u64 gb10 = (free_bytes * 10ull) / (1024ull * 1024ull * 1024ull);
+            itou(gb10 / 10ull, num, 10, 0);
+            for (int k = 0; num[k]; k++) *q++ = num[k];
+            *q++ = '.';
+            *q++ = (char)('0' + (char)(gb10 % 10ull));
+            const char *un = " GB free";
+            while (*un) *q++ = *un++;
+        } else {
+            u64 mb100 = (free_bytes * 100ull) / (1024ull * 1024ull);
+            itou(mb100 / 100ull, num, 10, 0);
+            for (int k = 0; num[k]; k++) *q++ = num[k];
+            *q++ = '.';
+            *q++ = (char)('0' + (char)((mb100 / 10ull) % 10ull));
+            *q++ = (char)('0' + (char)(mb100 % 10ull));
+            const char *un = " MB free";
+            while (*un) *q++ = *un++;
+        }
+        *q = 0;
+    }
     gfx_text(tx + tw - 10 - gfx_text_width(info, 1), sy, info, C_TEXT_DIM, 1);
 }
 
@@ -1144,14 +1377,17 @@ static void draw_ed(uwnd *w)
 {
     int idx = win_index(w);
     int tx = w->x, ty = w->y, tw = w->w, th = w->h;
-    gfx_round_rect(tx, ty, tw, th, C_PANEL, wfocus == idx ? C_ACCENT : 0x00405878u);
-    gfx_rect(tx + 2, ty + 2, tw - 4, 42, wfocus == idx ? C_TITLE : 0x002A3E5Cu);
-    gfx_cjk_text(tx + 12, ty + 12, T_EDIT, C_WHITE, 2);
-    gfx_text(tx + 12 + 64 + 10, ty + 18, "-", 0x00A8C0E0u, 1);
-    gfx_text(tx + 12 + 64 + 26, ty + 18, w->name, 0x00A8C0E0u, 1);
+    char tbuf[64];
+    int ti = 0;
+    for (int k = 0; w->name[k] && ti < 60; k++) tbuf[ti++] = w->name[k];
+    tbuf[ti] = 0;
+    draw_wnd_frame(tx, ty, tw, th, tbuf, wfocus == idx);
+    gfx_text(tx + 12, ty + 12, T_EDIT, C_WHITE, 2);
+    gfx_text(tx + 12 + 64 + 10, ty + 18, "-", C_TEXT, 1);
+    gfx_text(tx + 12 + 64 + 26, ty + 18, w->name, C_TEXT, 1);
     int cbx = tx + tw - 36, cby = ty + 9;
-    gfx_round_rect(cbx, cby, 26, 26, 0x00C04040u, 0x00802020u);
-    gfx_text(cbx + 7, cby + 3, "X", C_WHITE, 2);
+    gfx_round_rect(cbx, cby, 26, 26, C_PANEL, C_PANEL_DARK);
+    gfx_text(cbx + 8, cby + 3, "X", C_TEXT, 2);
 
     int bx, by, bw, bh;
     ed_text_box(w, &bx, &by, &bw, &bh);
@@ -1171,35 +1407,23 @@ static void draw_ed(uwnd *w)
 }
 
 /* ---------------- 桌面 / 任务栏 ---------------- */
-static void draw_taskbar(void)
-{
-    u32 w = gfx_width(), h = gfx_height();
-    gfx_rect(0, (int)h - 40, (int)w, 40, 0x00102038u);
-    gfx_text(12, (int)h - 30, "Wins:", 0x0080A0C0u, 1);
-    for (int k = 0; k < nz; k++) {
-        uwnd *w2 = &wins[zorder[k]];
-        int bxx = 70 + k * 176, byy = (int)h - 34;
-        int hot = (wfocus == zorder[k]);
-        gfx_round_rect(bxx, byy, 168, 28, hot ? 0x003A5E8Cu : 0x00203050u,
-                       hot ? C_ACCENT : 0x00405878u);
-        if (w2->type == WT_FM) {
-            gfx_cjk_text(bxx + 8, byy + 6, T_MYCOMPUTER, C_WHITE, 1);
-        } else {
-            gfx_text(bxx + 8, byy + 7, "ED:", 0x00A8C0E0u, 1);
-            gfx_text(bxx + 32, byy + 7, w2->name, C_WHITE, 1);
-        }
-    }
-}
 
 static void draw_desktop_bg(void)
 {
     u32 w = gfx_width(), h = gfx_height();
-    gfx_gradient(0, 0, (int)w, (int)h, C_DESKTOP_1, 0x00285088u);
-    draw_topbar();
-    draw_computer_icon(ICON_X, ICON_Y, 0);
-    gfx_cjk_center(ICON_X + ICON_W / 2, ICON_Y + ICON_H + 6, T_MYCOMPUTER, C_WHITE, 2);
-    gfx_text(ICON_X - 6, ICON_Y + ICON_H + 42, "double click", 0x0080A0C8u, 1);
+    gfx_gradient(0, 0, (int)w, (int)h - 30, 0x00108787u, 0x000A6464u);
+
+    icon_pc(ICON_X, ICON_Y);
+    icon_label(ICON_X + 16, ICON_Y + 36, "My");
+    icon_label(ICON_X + 16, ICON_Y + 48, "Computer");
+    icon_cmd(ICON_X, ICON_Y + 70);
+    icon_label(ICON_X + 16, ICON_Y + 106, "Command");
+    icon_label(ICON_X + 16, ICON_Y + 118, "Prompt");
+    icon_bin(ICON_X, ICON_Y + 140);
+    icon_label(ICON_X + 16, ICON_Y + 176, "Recycle Bin");
+
     draw_taskbar();
+    if (start_open) draw_start_menu();
 }
 
 static void draw_windows(void)
@@ -1218,14 +1442,14 @@ static void draw_dialog(void)
     uwnd *owner = &wins[dlg_owner];
     int px = owner->x + owner->w / 2 - 220;
     int py = owner->y + owner->h / 2 - 80;
-    gfx_round_rect(px, py, 440, 170, C_PANEL, 0x00405878u);
+    gfx_round_rect(px, py, 440, 170, C_PANEL, C_PANEL_DARK);
     gfx_rect(px + 2, py + 2, 436, 38, C_TITLE);
     if (dlg_mode == 1) {
-        gfx_cjk_text(px + 14, py + 8, T_RENAME, C_WHITE, 2);
-        gfx_text(px + 120, py + 14, "rename to", 0x00A8C0E0u, 1);
+        gfx_text(px + 14, py + 8, T_RENAME, C_WHITE, 2);
+        gfx_text(px + 120, py + 14, "rename to", C_TEXT, 1);
     } else {
-        gfx_cjk_text(px + 14, py + 8, T_NEW, C_WHITE, 2);
-        gfx_text(px + 84, py + 14, "name (file or folder)", 0x00A8C0E0u, 1);
+        gfx_text(px + 14, py + 8, T_NEW, C_WHITE, 2);
+        gfx_text(px + 84, py + 14, "name (file or folder)", C_TEXT, 1);
     }
 
     gfx_rect(px + 20, py + 56, 400, 32, C_WHITE);
@@ -1242,12 +1466,81 @@ static void draw_dialog(void)
 }
 
 /* ---------------- 重绘 ---------------- */
+
+/* ---------------- classic menu bar popups ---------------- */
+enum { MA_NONE, MA_NEW, MA_CLOSE, MA_RENAME, MA_DEL, MA_UP, MA_SAVE,
+       MA_COPY, MA_CUT, MA_PASTE, MA_SELALL, MA_ABOUT };
+
+typedef struct { const char *name; int enabled; int action; } mitem_t;
+
+static int menu_win = -1;
+static int menu_idx = -1;
+
+static int menu_title_off(int i)
+{
+    return (i == 0) ? 6 : (i == 1) ? 44 : (i == 2) ? 84 : 124;
+}
+
+static int menu_items(int type, int idx, mitem_t *out)
+{
+    int n = 0;
+    if (type == WT_FM) {
+        if (idx == 0) { out[n++] = (mitem_t){"New Folder", 1, MA_NEW}; out[n++] = (mitem_t){"Close", 1, MA_CLOSE}; }
+        else if (idx == 1) { out[n++] = (mitem_t){"Rename", 1, MA_RENAME}; out[n++] = (mitem_t){"Delete", 1, MA_DEL}; }
+        else if (idx == 2) { out[n++] = (mitem_t){"Up", 1, MA_UP}; }
+        else { out[n++] = (mitem_t){"About UMDos", 1, MA_ABOUT}; }
+    } else {
+        if (idx == 0) { out[n++] = (mitem_t){"Save", 1, MA_SAVE}; out[n++] = (mitem_t){"Close", 1, MA_CLOSE}; }
+        else if (idx == 1) {
+            out[n++] = (mitem_t){"Copy", 1, MA_COPY};
+            out[n++] = (mitem_t){"Cut", 1, MA_CUT};
+            out[n++] = (mitem_t){"Paste", 1, MA_PASTE};
+            out[n++] = (mitem_t){"Select All", 1, MA_SELALL};
+        } else if (idx == 2) {
+            out[n++] = (mitem_t){"Status Bar", 0, MA_NONE};
+        } else {
+            out[n++] = (mitem_t){"About UMDos", 0, MA_NONE};
+        }
+    }
+    return n;
+}
+
+static void draw_menus(void)
+{
+    if (menu_win < 0) return;
+    uwnd *w = &wins[menu_win];
+    if (!w->open) { menu_win = -1; return; }
+    mitem_t items[8];
+    int n = menu_items(w->type, menu_idx, items);
+    int px = w->x + menu_title_off(menu_idx);
+    int py = w->y + 42;
+    int pw = 150;
+    gfx_bevel_up(px, py, pw, 8 + n * 20, C_PANEL);
+    for (int i = 0; i < n; i++) {
+        int ry = py + 4 + i * 20;
+        gfx_text(px + 10, ry + 5, items[i].name, items[i].enabled ? C_TEXT : 0x00808080u, 1);
+    }
+}
+
+static void open_readme(void)
+{
+    u32 saved = fs_dir();
+    fs_set_dir(FS_ROOT_DIR);
+    int i = fs_find("README.TXT");
+    const fs_entry_t *e = (i >= 0) ? fs_at(i) : 0;
+    if (e) {
+        if (win_open_ed(FS_ROOT_DIR, e) >= 0) redraw();
+    }
+    fs_set_dir(saved);
+}
+
 static void redraw(void)
 {
     cursor_erase();
     draw_desktop_bg();
     draw_windows();
     if (dlg_open) draw_dialog();
+    draw_menus();
     cursor_draw();
 }
 
@@ -1437,6 +1730,12 @@ static void panic_demo(void)
 
 static void handle_key(int k)
 {
+    if (k == KEY_ESC && key_ctrl) { start_open = !start_open; start_sub = 0; redraw(); return; }
+    if (key_ctrl && (k == 'm' || k == 'M')) {
+        if (wfocus >= 0 && wins[wfocus].open) { menu_win = wfocus; menu_idx = 0; redraw(); }
+        return;
+    }
+    if (k == KEY_ESC && start_open) { start_open = start_sub = 0; redraw(); return; }
     if (k == KEY_F9) { panic_demo(); return; }
     if (k == KEY_F10) { term_run(); redraw(); return; }
     if (dlg_open) {
@@ -1574,11 +1873,45 @@ static void handle_key(int k)
 
 static void handle_click(void)
 {
-    /* 任务栏 */
     u32 h = gfx_height();
-    if (cur_y >= (int)h - 40) {
+    int mh = 8 + 7 * 22 + 6 + 2 * 22;
+
+    /* Start menu first */
+    if (start_open) {
+        int mx = 2, my = (int)h - 30 - mh;
+        if (start_sub == 1 && cur_x >= mx + 176 && cur_x < mx + 176 + 168 &&
+            cur_y >= my + 4 && cur_y < my + 4 + 5 * 22) {
+            int idx = (cur_y - (my + 4)) / 22;
+            start_open = start_sub = 0;
+            if (idx == 0) { win_open_fm(); redraw(); return; }
+            if (idx == 1) { term_run(); redraw(); return; }
+            if (idx == 2 || idx == 4) { open_readme(); return; }
+            redraw();
+            return;
+        }
+        if (cur_x >= mx && cur_x < mx + 176 && cur_y >= my && cur_y < my + mh) {
+            int row = (cur_y - (my + 4)) / 22;
+            if (row == 0) { start_sub = (start_sub == 1) ? 0 : 1; redraw(); return; }
+            if (row == 4) { start_open = start_sub = 0; open_readme(); return; }
+            if (row == 5) { start_open = start_sub = 0; term_run(); redraw(); return; }
+            if (row == 6) { start_open = start_sub = 0; acpi_shutdown(); return; }
+            if (row >= 7) { start_open = start_sub = 0; ui_lock_screen(); redraw(); return; }
+            return;
+        }
+        start_open = start_sub = 0;
+        redraw();
+    }
+
+    /* taskbar */
+    if (cur_y >= (int)h - 30) {
+        if (cur_x >= 3 && cur_x < 59) {
+            start_open = !start_open;
+            start_sub = 0;
+            redraw();
+            return;
+        }
         for (int k = 0; k < nz; k++) {
-            if (in_rect(cur_x, cur_y, 70 + k * 176, (int)h - 34, 168, 28)) {
+            if (in_rect(cur_x, cur_y, 70 + k * 156, (int)h - 27, 150, 24)) {
                 raise_win(zorder[k]);
                 redraw();
                 return;
@@ -1587,11 +1920,51 @@ static void handle_click(void)
         return;
     }
 
+    /* open menu popup item */
+    if (menu_win >= 0) {
+        uwnd *mw = &wins[menu_win];
+        mitem_t items[8];
+        int n2 = menu_items(mw->type, menu_idx, items);
+        int px = mw->x + menu_title_off(menu_idx);
+        int py = mw->y + 42, pw = 150;
+        if (cur_x >= px && cur_x < px + pw && cur_y >= py && cur_y < py + 8 + n2 * 20) {
+            int idx = (cur_y - py - 4) / 20;
+            if (idx >= 0 && idx < n2 && items[idx].enabled) {
+                int act = items[idx].action;
+                int mwi = menu_win;
+                menu_win = -1;
+                uwnd *mw2 = &wins[mwi];
+                switch (act) {
+                case MA_NEW: dlg_open_new(mwi); break;
+                case MA_CLOSE: close_win(mwi); break;
+                case MA_RENAME: fm_rename_open(mw2); break;
+                case MA_DEL: fm_delete_selected(mw2); break;
+                case MA_UP: fm_up(mw2); break;
+                case MA_SAVE: ed_save(mw2); break;
+                case MA_COPY: ed_copy(mw2); break;
+                case MA_CUT: ed_cut(mw2); break;
+                case MA_PASTE: ed_paste(mw2); break;
+                case MA_SELALL: ed_select_all(mw2); break;
+                case MA_ABOUT: fm_msg = "UMDos 64-bit"; break;
+                default: break;
+                }
+                redraw();
+                return;
+            }
+            return;
+        }
+        menu_win = -1;
+        redraw();
+    }
+
     int wi = win_at(cur_x, cur_y);
     if (wi < 0) {
-        /* 桌面图标 */
-        if (in_rect(cur_x, cur_y, ICON_X - 8, ICON_Y - 8, ICON_W + 16, ICON_H + 54)) {
+        if (in_rect(cur_x, cur_y, ICON_X - 16, ICON_Y - 8, 72, 66)) {
             if (win_open_fm() >= 0) { redraw(); DBG(0x31); }
+        } else if (in_rect(cur_x, cur_y, ICON_X - 16, ICON_Y + 56, 72, 72)) {
+            term_run();
+            redraw();
+            DBG(0x32);
         }
         return;
     }
@@ -1603,8 +1976,21 @@ static void handle_click(void)
 
     int tx = w->x, ty = w->y, tw = w->w, th = w->h;
 
-    /* 关闭按钮 */
-    if (in_rect(cur_x, cur_y, tx + tw - 36, ty + 9, 26, 26)) {
+    /* menu bar titles */
+    if (cur_y >= ty + 22 && cur_y < ty + 42) {
+        for (int mi = 0; mi < 4; mi++) {
+            int mx = tx + menu_title_off(mi);
+            if (cur_x >= mx - 2 && cur_x < mx + 34) {
+                menu_win = wi;
+                menu_idx = mi;
+                redraw();
+                return;
+            }
+        }
+    }
+
+    /* close button (new title-bar buttons) */
+    if (in_rect(cur_x, cur_y, tx + tw - 24, ty + 3, 18, 18)) {
         if (w->type == WT_ED) { close_win(wi); redraw(); }
         else { close_win(wi); redraw(); }
         DBG(0x39);
@@ -1657,6 +2043,10 @@ static void handle_click(void)
 /* P12：锁屏（Ctrl+L 进入，输入当前用户密码解锁） */
 static void ui_lock_screen(void)
 {
+    static const char *months[12] = {
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    };
     char pw[24];
     int len = 0;
     int err = 0;
@@ -1667,19 +2057,47 @@ static void ui_lock_screen(void)
 
     for (;;) {
         u32 w = gfx_width(), h = gfx_height();
-        gfx_gradient(0, 0, (int)w, (int)h, 0x000A1428u, 0x00183050u);
-        gfx_text_center((int)w / 2, (int)h / 2 - 120, "UMDos locked", C_WHITE, 4);
-        gfx_text_center((int)w / 2, (int)h / 2 - 50, "password to unlock", 0x00B0C8E0u, 1);
-        int bw = 420, bh = 46;
-        int bx = (int)w / 2 - bw / 2, by = (int)h / 2;
-        gfx_round_rect(bx, by, bw, bh, 0x00102030u, 0x00507090u);
-        char mask[25];
-        for (int i = 0; i < len; i++) mask[i] = '*';
-        mask[len] = 0;
-        gfx_text(bx + 14, by + 14, mask, C_WHITE, 2);
+        gfx_gradient(0, 0, (int)w, (int)h, 0x000A1322u, 0x00122038u);
+
+        u32 hh, mm, ss;
+        rtc_hms(&hh, &mm, &ss);
+        char tb[8];
+        char *p = itou(hh, tb, 10, 2);
+        *p++ = ':';
+        p = itou(mm, p, 10, 2);
+        *p = 0;
+        gfx_text(60, (int)h - 300, tb, 0x00FFFFFFu, 7);
+
+        u32 day = bcd2bin(cmos_read(0x07));
+        u32 mon = bcd2bin(cmos_read(0x08));
+        if (mon < 1 || mon > 12) mon = 11;
+        if (day < 1 || day > 31) day = 1;
+        char db[40];
+        char *q = db;
+        const char *mn = months[mon - 1];
+        while (*mn) *q++ = *mn++;
+        *q++ = ' ';
+        q = itou(day, q, 10, 0);
+        *q = 0;
+        gfx_text(64, (int)h - 170, db, 0x00B8C4D8u, 2);
+        gfx_text(64, (int)h - 128, "UMDos 2.6  -  Locked", 0x008E9AACu, 2);
+
+        gfx_text(40, 40, "Press Enter to unlock", 0x00A8B4C8u, 1);
+
+        int bw = 320, bh = 36;
+        int bx = 60, by = (int)h - 66;
+        gfx_rect(bx, by, bw, bh, 0x001A2A44u);
+        gfx_frame(bx, by, bw, bh, 0x00C8D2E0u);
+        for (int i = 0; i < len; i++)
+            gfx_char(bx + 12 + i * 8, by + 10, '*', 0x00FFFFFFu, 1);
         if (err)
-            gfx_text_center((int)w / 2, by + 68, "wrong password", 0x00FF9090u, 2);
-        gfx_text_center((int)w / 2, by + 120, "Enter = unlock", 0x0090A8B8u, 1);
+            gfx_text(bx, by - 26, "Wrong password", 0x00FF8A80u, 1);
+        else
+            gfx_text(bx, by - 26, "Password", 0x008E9AACu, 1);
+
+        fill_circle((int)w - 36, (int)h - 42, 15, 0x00D8DEE8u);
+        fill_circle((int)w - 36, (int)h - 42, 11, 0x000F1F38u);
+        gfx_vline((int)w - 36, (int)h - 52, 12, 0x00D8DEE8u);
 
         input_event ev;
         while (!input_poll(&ev))

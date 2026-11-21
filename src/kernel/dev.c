@@ -8,6 +8,7 @@
 #include "io.h"
 #include "input.h"
 #include "ata.h"
+#include "ahci.h"
 
 static dev_t *g_devs[DEV_MAX];
 static int g_ndev;
@@ -51,6 +52,34 @@ static int in_read(dev_t *d, void *buf, u32 len)
     return 0;
 }
 
+/* ---------------- ahci（块设备，按 512 字节扇区） ---------------- */
+static dev_t g_ahci_devs[AHCI_MAX_DISKS];
+
+static int ahci_dev_index(dev_t *d)
+{
+    for (int i = 0; i < AHCI_MAX_DISKS; i++)
+        if (d == &g_ahci_devs[i]) return i;
+    return -1;
+}
+
+static int ahci_dev_read(dev_t *d, void *buf, u32 len)
+{
+    int i = ahci_dev_index(d);
+    if (i < 0 || len < 512) return -1;
+    if (ahci_disk_read(i, 0, 1, buf) != 0) return -1;
+    d->rx += 512;
+    return 512;
+}
+
+static int ahci_dev_write(dev_t *d, const void *buf, u32 len)
+{
+    int i = ahci_dev_index(d);
+    if (i < 0 || len < 512) return -1;
+    if (ahci_disk_write(i, 0, 1, buf) != 0) return -1;
+    d->tx += 512;
+    return 512;
+}
+
 /* ---------------- ata（块设备，按 512 字节扇区） ---------------- */
 static int ata_dev_read(dev_t *d, void *buf, u32 len)
 {
@@ -88,13 +117,32 @@ void dev_init(void)
     mouse.read = in_read;
     dev_register(&mouse);
 
+    for (int i = 0; i < ahci_disk_count(); i++) {
+        char nm[8];
+        nm[0] = 'a'; nm[1] = 'h'; nm[2] = 'c'; nm[3] = 'i';
+        nm[4] = (char)('0' + i);
+        nm[5] = 0;
+        strcpy_s(g_ahci_devs[i].name, sizeof(g_ahci_devs[i].name), nm);
+        g_ahci_devs[i].type = DEV_BLOCK;
+        g_ahci_devs[i].read = ahci_dev_read;
+        g_ahci_devs[i].write = ahci_dev_write;
+        dev_register(&g_ahci_devs[i]);
+    }
+
     strcpy_s(ata.name, sizeof(ata.name), "ata");
     ata.type = DEV_BLOCK;
     ata.irq = 14;
     ata.read = ata_dev_read;
     dev_register(&ata);
 
-    serial_puts("[kernel] dev: registered serial/kbd/mouse/ata\n");
+    serial_puts("[kernel] dev: registered serial/kbd/mouse");
+    for (int i = 0; i < ahci_disk_count(); i++) {
+        char b[8];
+        serial_puts("/ahci");
+        itou((u64)i, b, 10, 0);
+        serial_puts(b);
+    }
+    serial_puts("/ata\n");
 }
 
 int dev_register(dev_t *d)

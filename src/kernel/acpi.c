@@ -8,6 +8,8 @@
 #include "io.h"
 
 static acpi_info_t g_acpi;
+static u32 g_lapic_ids[8];
+static u32 g_lapic_n;
 
 typedef struct {
     u8  sig[8];
@@ -115,6 +117,13 @@ static int sig4(const u8 *p, const char *s)
 
 const acpi_info_t *acpi_info(void) { return &g_acpi; }
 
+u32 acpi_lapic_ids(u32 *out, u32 cap)
+{
+    u32 n = g_lapic_n < cap ? g_lapic_n : cap;
+    for (u32 i = 0; i < n; i++) out[i] = g_lapic_ids[i];
+    return n;
+}
+
 const acpi_info_t *acpi_init(void)
 {
     for (u32 i = 0; i < sizeof(g_acpi); i++) ((u8 *)&g_acpi)[i] = 0;
@@ -182,7 +191,10 @@ const acpi_info_t *acpi_init(void)
             const u8 *p = (const u8 *)t + 44;
             const u8 *end = (const u8 *)t + t->len;
             while (p + 2 <= end && p[1] >= 2) {
-                if (p[0] == 0) g_acpi.lapic_count++;
+                if (p[0] == 0) {
+                    g_acpi.lapic_count++;
+                    if (g_lapic_n < 8) g_lapic_ids[g_lapic_n++] = (u32)p[3];
+                }
                 p += p[1];
             }
         }

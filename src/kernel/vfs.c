@@ -12,6 +12,7 @@
 #include "dev.h"
 #include "io.h"
 #include "proc.h"
+#include "spinlock.h"
 #include "mem.h"
 
 typedef vfs_fd_t fd_t;
@@ -570,6 +571,21 @@ int vfs_selftest(void)
 }
 
 /* ---------------- P11/P12：目录操作与权限 ---------------- */
+static spinlock_t g_vfs_lock;
+
+u64 vfs_lock(void)
+{
+    u64 f = irq_save();
+    spin_lock(&g_vfs_lock);
+    return f;
+}
+
+void vfs_unlock(u64 f)
+{
+    spin_unlock(&g_vfs_lock);
+    irq_restore(f);
+}
+
 static int g_role = 1;          /* 0 = 普通用户，1 = 管理员；未登录时内核上下文视为管理员 */
 
 void vfs_set_role(int role) { g_role = role ? 1 : 0; }

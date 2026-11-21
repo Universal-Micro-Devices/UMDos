@@ -21,6 +21,7 @@ typedef struct {
 
 const acpi_info_t *acpi_init(void);
 const acpi_info_t *acpi_info(void);
+u32 acpi_lapic_ids(u32 *out, u32 cap);
 
 int acpi_shutdown(void);          /* 0 = 已发出关机命令 */
 int acpi_reboot(void);            /* 0 = 已发出复位命令 */

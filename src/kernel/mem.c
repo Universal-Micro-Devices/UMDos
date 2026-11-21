@@ -7,6 +7,7 @@
  */
 #include "mem.h"
 #include "io.h"
+#include "spinlock.h"
 
 #define FRAME_SIZE   4096u
 #define MAX_FRAMES   (128u * 1024u * 1024u / FRAME_SIZE)   /* 最多管理 128MB */
@@ -178,7 +179,9 @@ typedef struct blk {
 static blk_t *free_list;
 static u64 heap_used;
 
-void *kmalloc(u64 n)
+static spinlock_t heap_lock;
+
+static void *kmalloc_raw(u64 n)
 {
     if (!heap_base || !n) return 0;
     n = (n + 15) & ~15ull;
@@ -203,13 +206,32 @@ void *kmalloc(u64 n)
     return (void *)((u8 *)b + sizeof(blk_t));
 }
 
-void kfree(void *p)
+static void kfree_raw(void *p)
 {
     if (!p) return;
     blk_t *b = (blk_t *)((u8 *)p - sizeof(blk_t));
     b->next = free_list;
     free_list = b;
     if (heap_used >= b->size) heap_used -= b->size;
+}
+
+void *kmalloc(u64 n)
+{
+    u64 f = irq_save();
+    spin_lock(&heap_lock);
+    void *p = kmalloc_raw(n);
+    spin_unlock(&heap_lock);
+    irq_restore(f);
+    return p;
+}
+
+void kfree(void *p)
+{
+    u64 f = irq_save();
+    spin_lock(&heap_lock);
+    kfree_raw(p);
+    spin_unlock(&heap_lock);
+    irq_restore(f);
 }
 
 /* ---------------- 用户窗口页表（PML4 索引 256） ---------------- */

@@ -2,6 +2,6 @@
 #ifndef INSTALLER_VERSION_H
 #define INSTALLER_VERSION_H
 
-#define INSTALLER_VERSION "v2.6.112-dev.8"
+#define INSTALLER_VERSION "v2.6.112-dev.15"
 
 #endif

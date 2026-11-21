@@ -80,7 +80,7 @@ python tools/test_persist.py    # 写回磁盘
 python tools/test_installer.py  # 安装引导（英文界面 + 功能）
 ```
 
-全部通过；截图见 `shots/ui-login.png`、`ui-desktop.png`、`ui-terminal.png`、`ui-fm.png`。
+全部通过。
 
 ## 6. 已知限制
 

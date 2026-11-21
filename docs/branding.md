@@ -36,7 +36,7 @@ python tools/test_p11p12.py
 python tools/test_p15p16.py
 ```
 
-全部通过；截图：`shots/logo-splash.png`、`shots/logo-login.png`。
+全部通过。
 
 ## 5. 已知限制
 

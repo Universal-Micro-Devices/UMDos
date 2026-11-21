@@ -41,7 +41,6 @@
 |---|---|
 | `src/kernel/ui.c` | 重写 `splash_static`/`splash_panel`、`draw_login`、`ui_lock_screen`；新增 `fill_ellipse/fill_circle`；登录鼠标命中区更新 |
 | `docs/screens.md` | 本说明 |
-| `shots/new-splash.png` / `new-login.png` / `new-lock.png` | 截图 |
 
 未改动：桌面/窗口/终端/文件系统/认证逻辑，内核其余部分。
 
@@ -52,7 +51,7 @@ python tools/test_chain.py     # 启动链/登录/桌面
 python tools/test_p11p12.py    # 登录失败限速/锁屏
 ```
 
-全部通过；截图见 `shots/`。
+全部通过。
 
 ## 6. 已知限制
 

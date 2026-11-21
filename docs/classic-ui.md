@@ -78,7 +78,7 @@ VBE 优先选 800×600×32（模式 0x11A）；窗口尺寸与终端网格按 80
 python tools/test_chain.py
 python tools/emu_ui.py
 ```
-全部通过；截图：`shots/classic-desktop.png`、`classic-start.png`、`classic-fm.png`、`classic-term.png`。
+全部通过。
 
 ## 8. 已知限制
 

@@ -63,7 +63,7 @@ reference. Phase notes are indexed in [`docs/README.md`](docs/README.md).
 - ATA PIO **and** AHCI drivers, PCI enumeration, ACPI tables
 - SHA-256 / SHA-3 authentication, multi-user support
 - Text console, graphics mode with bitmap fonts, classic-DOS-style UI + shell
-- Full-screen text editor (find / replace / paste / indent) — see `shots/`
+- Full-screen text editor (find / replace / paste / indent)
 
 ## Repository layout
 
@@ -84,7 +84,6 @@ reference. Phase notes are indexed in [`docs/README.md`](docs/README.md).
 ├── tools/              # emulator, image builders, and the test suite
 ├── docs/               # per-phase design notes (P3-P4 ... P18, roadmap)
 ├── assets/             # icons and logo
-├── shots/              # screenshots of UI / editor features
 └── images/dev15/       # prebuilt floppy / hdd / ISO images for this version
 ```
 

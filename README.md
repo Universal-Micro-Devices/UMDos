@@ -1,5 +1,9 @@
 # UMDos
 
+[![Version](https://img.shields.io/badge/version-v2.6.112--dev.15-blue)](VERSION)
+[![License](https://img.shields.io/badge/license-GPL--2.0-green)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-x86%20%7C%20BIOS%20%2B%20UEFI-lightgrey)](docs/boot-map.md)
+
 **An independent, from-scratch operating system by
 [Universal Micro Devices](https://github.com/Universal-Micro-Devices).**
 
@@ -21,6 +25,21 @@ boot chain, our own kernel, our own VFS, our own shell, our own UI.
 | Focus | P18 — AHCI port-reset / retry error recovery, multi-disk self-test |
 | Boot chain | Legacy BIOS (4-stage) **and** UEFI (dual-track) |
 | Arch | x86, 32-bit protected mode to 64-bit long-mode kernel |
+
+## Prebuilt images
+
+Ready-to-boot binaries for this snapshot are in
+[`images/dev15/`](images/dev15/):
+
+| File | Use |
+|---|---|
+| `UMDos v2.6.112-dev.15 floppy.img` | 1.44MB floppy boot image |
+| `UMDos v2.6.112-dev.15 hdd.img` | 16MB hard-disk image (installed system) |
+| `UMDos v2.6.112-dev.15.iso` | El Torito bootable CD image |
+| `UMDos installer v2.6.112-dev.15.iso` | standalone installer CD |
+
+The previous snapshot (`v2.6.112-dev.8`) is kept under `images/dev8/` for
+reference. Phase notes are indexed in [`docs/README.md`](docs/README.md).
 
 ## Highlights (P18)
 
@@ -66,7 +85,7 @@ boot chain, our own kernel, our own VFS, our own shell, our own UI.
 ├── docs/               # per-phase design notes (P3-P4 ... P18, roadmap)
 ├── assets/             # icons and logo
 ├── shots/              # screenshots of UI / editor features
-└── img & iso/dev15/    # prebuilt floppy / hdd / ISO images for this version
+└── images/dev15/       # prebuilt floppy / hdd / ISO images for this version
 ```
 
 ## Build
@@ -80,7 +99,7 @@ python tools/build_installer.py   # installer ISO
 ```
 
 Outputs land in the repository root; the prebuilt copies live in
-`img & iso/dev15/`.
+`images/dev15/`.
 
 ## Run (QEMU)
 
@@ -108,9 +127,10 @@ python tools/verify_iso.py        # ISO boot-record checks
 
 ## Docs
 
-Design notes for every phase are in [`docs/`](docs/): `p3-p4.md` ...
-`p18.md`, plus `roadmap.md`, `boot-map.md`, `audit.md`, `branding.md`,
-`classic-ui.md`. Chinese-language working notes are kept as-is.
+Design notes for every phase are in [`docs/`](docs/) — see the index at
+[`docs/README.md`](docs/README.md) for `p3-p4.md` ... `p18.md`,
+`roadmap.md`, `boot-map.md`, `audit.md`, `classic-ui.md` and friends.
+The notes are Chinese-language working documents, kept as written.
 
 ## License
 
